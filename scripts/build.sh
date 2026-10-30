@@ -138,6 +138,27 @@ elif [ "$DAEMON_KIND" = "dynamic" ]; then
     ABI_RESULT="built (dynamic bionic, qemu cannot load bionic)"
 fi
 
+# ---------------------------------------------------------- Magisk module
+# The module is packaged *before* the APK because the APK ships it as
+# assets/module.zip: install the app and it can set the module up by itself.
+echo "==> packaging the Magisk module"
+MOD=build/module
+mkdir -p "$MOD/META-INF/com/google/android" "$MOD/system/bin" build/zip build/assets
+cp module/module.prop module/customize.sh module/service.sh module/action.sh \
+   module/uninstall.sh "$MOD/"
+cp module/META-INF/com/google/android/update-binary \
+   module/META-INF/com/google/android/updater-script \
+   "$MOD/META-INF/com/google/android/"
+cp build/dlss5d "$MOD/system/bin/dlss5d"
+cp README.md "$MOD/README.md"
+chmod 0755 "$MOD" "$MOD/system/bin" "$MOD/META-INF/com/google/android"
+chmod 0644 "$MOD/module.prop" "$MOD/README.md" \
+           "$MOD/META-INF/com/google/android/updater-script"
+chmod 0755 "$MOD"/*.sh "$MOD/META-INF/com/google/android/update-binary" \
+           "$MOD/system/bin/dlss5d"
+(cd "$MOD" && zip -q -r -X "../../build/zip/DLSS5-$VERSION-arm64.zip" .)
+cp "build/zip/DLSS5-$VERSION-arm64.zip" build/assets/module.zip
+
 # ------------------------------------------------------------------ APK
 echo "==> compiling resources"
 "$BUILD_TOOLS/aapt2" compile --dir app/res -o build/res/resources.zip
@@ -145,6 +166,7 @@ echo "==> compiling resources"
     -I "$ANDROID_JAR" \
     --manifest app/AndroidManifest.xml \
     -R build/res/resources.zip \
+    -A build/assets \
     --java build/gen \
     --min-sdk-version 26 \
     --target-sdk-version 36 \
@@ -196,22 +218,13 @@ javac -encoding UTF-8 -d build/test \
     app/src/com/mmunki/dlss5/core/*.java app/tests/CoreTests.java
 java -ea -cp build/test CoreTests
 
-# ---------------------------------------------------------- Magisk module
-echo "==> packaging the Magisk module"
-MOD=build/module
-cp module/module.prop module/customize.sh module/service.sh module/action.sh \
-   module/uninstall.sh "$MOD/"
-mkdir -p "$MOD/META-INF/com/google/android"
-cp module/META-INF/com/google/android/update-binary \
-   module/META-INF/com/google/android/updater-script \
-   "$MOD/META-INF/com/google/android/"
-mkdir -p "$MOD/system/bin"
-cp build/dlss5d "$MOD/system/bin/dlss5d"
-chmod 0755 "$MOD/system/bin/dlss5d" "$MOD"/*.sh "$MOD/META-INF/com/google/android/update-binary"
-cp README.md "$MOD/README.md"
-(cd "$MOD" && zip -q -r -X "../../dist/DLSS5-$VERSION-arm64.zip" .)
+# ---------------------------------------------------------- module tests
+echo "==> running the module install test"
+./scripts/module-test.sh "build/zip/DLSS5-$VERSION-arm64.zip" \
+    "dist/DLSS5-$VERSION.apk"
 
 # --------------------------------------------------------------- checksums
+cp build/zip/DLSS5-"$VERSION"-arm64.zip dist/
 (cd dist && sha256sum ./*.apk ./*.zip | sed 's|\./||' > SHA256SUMS)
 cat dist/SHA256SUMS
 
@@ -220,8 +233,9 @@ cat <<EOF
 ==> test matrix
 ABI        build           selftest
 arm64-v8a  ok ($DAEMON_KIND)  $ABI_RESULT
+host       ok              selftest + integration + module install
 
 ==> artifacts
-dist/DLSS5-$VERSION.apk
+dist/DLSS5-$VERSION.apk          (contains assets/module.zip)
 dist/DLSS5-$VERSION-arm64.zip
 EOF

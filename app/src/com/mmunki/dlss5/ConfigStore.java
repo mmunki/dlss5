@@ -3,6 +3,7 @@ package com.mmunki.dlss5;
 import android.content.Context;
 
 import com.mmunki.dlss5.core.Config;
+import com.mmunki.dlss5.core.Paths;
 import com.mmunki.dlss5.core.Status;
 
 import java.io.File;
@@ -14,13 +15,32 @@ import java.io.Writer;
 /** Reads and writes /data/adb/dlss5 through root. */
 public final class ConfigStore {
 
-    public static final String DIR = "/data/adb/dlss5";
-    public static final String CONFIG = DIR + "/config.json";
-    public static final String STATUS = DIR + "/status.json";
-    public static final String LOG = DIR + "/dlss5.log";
+    public static final String DIR = Paths.DIR;
+    public static final String CONFIG = Paths.CONFIG;
+    public static final String STATUS = Paths.STATUS;
+    public static final String LOG = Paths.LOG;
+    public static final String MODULE_DIR = Paths.MODULE_DIR;
+    public static final String MODULE_PROP = Paths.MODULE_PROP;
 
-    private static final String DAEMON_CANDIDATES =
-            "/system/bin/dlss5d /data/adb/modules/dlss5/system/bin/dlss5d";
+    /** The daemon copy in /data/adb is authoritative: it is a normal file, it
+     * is always executable and it exists without the magisk mount.  The
+     * mounted paths are fallbacks for an install made by the module zip. */
+    public static final String RUNTIME_BIN = Paths.RUNTIME_BIN;
+
+    private static final String DAEMON_CANDIDATES = Paths.candidateList();
+
+    /**
+     * Finds the first candidate that exists and can be executed, repairing the
+     * execute bit on the way.  Prints {@code BIN=<path>} (empty when none).
+     * This is the fix for "Unable to find the file even the file does exists":
+     * the old check was {@code [ -x ... ]} only, so a 0644 daemon looked
+     * missing.
+     */
+    private static final String FIND_BIN =
+            "BIN=; for c in " + DAEMON_CANDIDATES + "; do "
+                    + "[ -f \"$c\" ] && chmod 0755 \"$c\" 2>/dev/null; "
+                    + "if [ -x \"$c\" ]; then BIN=\"$c\"; break; fi; done; "
+                    + "echo \"BIN=$BIN\"";
 
     private ConfigStore() {
     }
@@ -75,18 +95,45 @@ public final class ConfigStore {
     }
 
     public static boolean moduleInstalled() {
-        return RootShell.run("test -f /data/adb/modules/dlss5/module.prop").ok();
+        return RootShell.run("test -f " + MODULE_PROP).ok();
     }
 
+    /** The path of the first executable daemon binary, or "" when none works. */
+    public static String daemonPath() {
+        RootShell.Result result = RootShell.run(FIND_BIN);
+        for (String line : result.output.split("\n")) {
+            line = line.trim();
+            if (line.startsWith("BIN=")) {
+                return line.substring(4).trim();
+            }
+        }
+        return "";
+    }
+
+    /** Module present and daemon executable: everything the app needs. */
+    public static boolean moduleReady() {
+        return moduleInstalled() && !daemonPath().isEmpty();
+    }
+
+    /** Starts the daemon from whichever binary works and reports what happened. */
     public static String restartDaemon() {
         RootShell.Result result = RootShell.run(
-                "pkill -f dlss5d 2>/dev/null; sleep 0.3; "
-                        + "BIN=; for c in " + DAEMON_CANDIDATES + "; do "
-                        + "[ -x \"$c\" ] && BIN=\"$c\" && break; done; "
-                        + "[ -n \"$BIN\" ] || { echo missing-binary; exit 1; }; "
-                        + "mkdir -p " + DIR + " && chmod 700 " + DIR + "; "
+                "for pid in $(pidof dlss5d 2>/dev/null); do kill \"$pid\" 2>/dev/null; done; "
+                        + "sleep 0.4; "
+                        + FIND_BIN + "; "
+                        + "if [ -z \"$BIN\" ]; then "
+                        + "echo \"no executable dlss5d in: " + DAEMON_CANDIDATES + "\"; "
+                        + "echo \"open the app and tap 'Install / repair the DLSS5 module'\"; "
+                        + "exit 1; fi; "
+                        + "mkdir -p " + DIR + "/bin && chmod 700 " + DIR + "; "
+                        + "\"$BIN\" --version >/dev/null 2>&1 "
+                        + "|| { echo \"$BIN exists but cannot run\"; exit 1; }; "
+                        + "rm -f " + Paths.STOP + "; "
                         + "nohup \"$BIN\" --daemon >>" + LOG + " 2>&1 & "
-                        + "sleep 0.4; pidof dlss5d >/dev/null && echo started");
+                        + "sleep 0.8; "
+                        + "if pidof dlss5d >/dev/null 2>&1; then "
+                        + "echo \"daemon started: $BIN\"; "
+                        + "else echo \"daemon did not start, see " + LOG + "\"; fi");
         return result.output;
     }
 }

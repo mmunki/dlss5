@@ -1,6 +1,8 @@
 package com.mmunki.dlss5;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
@@ -55,6 +57,7 @@ public class MainActivity extends Activity {
     private Switch refreshSwitch;
     private Switch hudSwitch;
     private Button overlayButton;
+    private Button installButton;
     private SeekBar scaleSeek;
     private SeekBar fpsSeek;
     private SeekBar saturationSeek;
@@ -69,6 +72,8 @@ public class MainActivity extends Activity {
     private TextView uiLabel;
     private LinearLayout gamesContainer;
     private boolean populating;
+    private boolean installing;
+    private boolean autoSetupTried;
 
     private final Runnable statusTick = new Runnable() {
         @Override
@@ -247,8 +252,31 @@ public class MainActivity extends Activity {
         });
         root.addView(restart);
 
+        installButton = new Button(this);
+        installButton.setText("Install / repair the DLSS5 module");
+        installButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                installModule(false);
+            }
+        });
+        root.addView(installButton);
+
+        TextView installHint = new TextView(this);
+        installHint.setText("The Magisk module ships inside this APK. Installing it "
+                + "needs root only - no zip to flash, no Magisk app needed. The daemon "
+                + "starts immediately; a reboot makes /system/bin/dlss5d available and "
+                + "starts DLSS5 with Android.");
+        installHint.setTextColor(Color.rgb(140, 148, 160));
+        installHint.setTextSize(11);
+        installHint.setPadding(dp(4), 0, 0, dp(8));
+        root.addView(installHint);
+
         TextView footer = new TextView(this);
-        footer.setText("\nDLSS5 is not NVIDIA DLSS. It is an on-device graphics "
+        footer.setText("\nThe Magisk module is inside this APK: 'Install / repair' "
+                + "writes it to /data/adb/modules/dlss5 and starts the daemon. A reboot "
+                + "finishes the install and autostarts it with Android.\n\n"
+                + "DLSS5 is not NVIDIA DLSS. It is an on-device graphics "
                 + "engine: it forces anti-aliasing, pins the GPU/CPU governors, "
                 + "locks the display refresh rate, shifts the interface size of "
                 + "the game, lowers the internal render resolution through "
@@ -420,17 +448,24 @@ public class MainActivity extends Activity {
             public void run() {
                 final boolean root = RootShell.available();
                 final boolean module = root && ConfigStore.moduleInstalled();
+                final String binary = root ? ConfigStore.daemonPath() : "";
+                final boolean ready = root && module && !binary.isEmpty();
                 final boolean running = root && ConfigStore.daemonRunning();
                 final Config loaded = root ? ConfigStore.load() : Config.defaults();
                 final String environment = (root ? "root: yes" : "root: no (su not found)")
                         + "   module: " + (module ? "installed" : "not installed")
-                        + "   daemon: " + (running ? "running" : "stopped");
+                        + "   daemon: " + (running ? "running"
+                                : binary.isEmpty() ? "no executable binary" : "stopped")
+                        + (binary.isEmpty() ? "" : "\n" + binary);
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
                         config = loaded;
                         applyConfigToViews();
                         environmentView.setText(environment);
+                        installButton.setText(ready
+                                ? "Reinstall / repair the DLSS5 module"
+                                : "Install the DLSS5 module (needs root)");
                         if (!root) {
                             Toast.makeText(MainActivity.this,
                                     "DLSS5 needs root. Install the Magisk module first.",
@@ -439,6 +474,21 @@ public class MainActivity extends Activity {
                     }
                 });
                 loadAppsBlocking(root);
+                // The module lives inside the APK, so the app can set itself
+                // up on the first launch with root: install, start, offer the
+                // reboot.  It runs once; after that the button is the way in.
+                if (root && !ready) {
+                    SharedPreferences prefs = getSharedPreferences("dlss5", MODE_PRIVATE);
+                    if (!autoSetupTried && !prefs.getBoolean("auto_setup", false)) {
+                        prefs.edit().putBoolean("auto_setup", true).apply();
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                installModule(true);
+                            }
+                        });
+                    }
+                }
             }
         }).start();
     }
@@ -680,6 +730,85 @@ public class MainActivity extends Activity {
                         refreshStatus();
                     }
                 });
+            }
+        }).start();
+    }
+
+    private void installModule(final boolean automatic) {
+        if (installing) {
+            return;
+        }
+        installing = true;
+        autoSetupTried = true;
+        statusView.setText(automatic
+                ? "setting up DLSS5, installing the bundled module..."
+                : "installing the bundled module...");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final ModuleInstaller.Result result =
+                        ModuleInstaller.install(MainActivity.this);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        installing = false;
+                        if (result.ok) {
+                            Toast.makeText(MainActivity.this,
+                                    "Module installed, daemon started",
+                                    Toast.LENGTH_SHORT).show();
+                            showRebootDialog(result.log);
+                            loadState();
+                        } else {
+                            statusView.setText("module install failed");
+                            new AlertDialog.Builder(MainActivity.this)
+                                    .setTitle("Module install failed")
+                                    .setMessage("DLSS5 could not install its module.\n\n"
+                                            + "Make sure root works (su -c id prints uid=0) "
+                                            + "and that /data/adb is writable, then tap "
+                                            + "'Install / repair the DLSS5 module' again.\n\n"
+                                            + result.log)
+                                    .setPositiveButton("OK", null)
+                                    .show();
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void showRebootDialog(String log) {
+        new AlertDialog.Builder(this)
+                .setTitle("DLSS5 is installed")
+                .setMessage("The daemon is running now and the Quick Settings tile works.\n\n"
+                        + "Reboot to finish: the module is mounted as /system/bin/dlss5d "
+                        + "and starts with Android, so the boost is there before your first "
+                        + "game.\n\n" + log)
+                .setPositiveButton("Reboot now", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface dialog, int which) {
+                        reboot();
+                    }
+                })
+                .setNegativeButton("Later", null)
+                .show();
+    }
+
+    private void reboot() {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                RootShell.Result result = RootShell.run(
+                        "svc power reboot 2>/dev/null || reboot 2>/dev/null");
+                if (!result.ok()) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            Toast.makeText(MainActivity.this,
+                                    "Could not reboot, restart the phone manually.",
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    });
+                }
             }
         }).start();
     }
