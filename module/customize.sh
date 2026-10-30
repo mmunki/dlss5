@@ -2,7 +2,8 @@
 # Runs inside the module installer.  $MODPATH is the module directory.
 
 ui_print " "
-ui_print "  DLSS5 1.0.0 - per-game render engine"
+ui_print "  DLSS5 2.0.0 - per-game ultra graphics engine"
+ui_print "  msaa force . cpu+gpu boost . refresh lock . game ui mode . ai scale"
 ui_print " "
 
 ABI="$(getprop ro.product.cpu.abi)"

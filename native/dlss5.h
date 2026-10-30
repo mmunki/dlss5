@@ -9,8 +9,8 @@
 
 #include <stddef.h>
 
-#define D5_VERSION "1.0.0"
-#define D5_VERSION_CODE 1
+#define D5_VERSION "2.0.0"
+#define D5_VERSION_CODE 2
 
 #define D5_MAX_GAMES 64
 #define D5_PKG_LEN 128
@@ -35,6 +35,12 @@ typedef struct {
     int enabled;          /* master switch, driven by the QS tile */
     int ai;               /* adaptive neural controller */
     int gpu_boost;        /* write the GPU governor while a game runs */
+    int cpu_boost;        /* pin every CPU cluster to performance while playing */
+    int msaa;             /* forced anti-aliasing: 0, 4 or 8 (setprop) */
+    int refresh_lock;     /* touch peak/min refresh rate while a game runs */
+    int refresh_rate;     /* hertz target, 0 = leave the panel alone */
+    int ui_density_delta; /* per-game UI scale shift, -200..200 (wm density) */
+    int hud;              /* app-side game HUD; the daemon only round-trips it */
     float downscale;      /* user quality floor, 1.0 = native */
     int target_fps;       /* 0 = leave the panel alone */
     int saturation;       /* 0..100, 100 = native colour */
@@ -56,6 +62,12 @@ typedef struct {
     float fps_hint;
 } D5Decision;
 
+/* One applied CPU cluster (sysfs cpufreq policy). */
+typedef struct {
+    char path[D5_PATH_LEN];
+    char orig[24];
+} D5CpuSlot;
+
 typedef struct {
     int active;
     char pkg[D5_PKG_LEN];
@@ -66,6 +78,22 @@ typedef struct {
     int governor_set;
     char gov_path[D5_PATH_LEN];
     char gov_orig[64];
+    int msaa;             /* 0/4/8 as applied */
+    int msaa_set;
+    char msaa_orig[24];   /* "" = the prop was not set before */
+    int force_set;        /* debug.egl.force_msaa was touched */
+    char force_orig_str[24];
+    int cpu_set;
+    int cpu_count;
+    D5CpuSlot cpu[8];
+    int refresh_set;      /* peak/min refresh-rate settings touched */
+    int refresh_value;
+    char refresh_orig_peak[24]; /* "" = the setting was unset before */
+    char refresh_orig_min[24];
+    int density_set;      /* wm density touched */
+    int density;          /* value applied */
+    char density_orig[24];/* "" = there was no override before */
+    char density_base[24];/* the physical density the shift is relative to */
 } D5Applied;
 
 /* ---------------------------------------------------------------- logging */
@@ -117,6 +145,7 @@ int d5_config_load(const char *path, D5Config *cfg);
 int d5_config_save(const char *path, const D5Config *cfg);
 int d5_config_has_game(const D5Config *cfg, const char *pkg);
 float d5_snap_scale(float scale);
+int d5_snap_msaa(int value);
 
 /* ---------------------------------------------------------------- signals */
 float d5_read_thermal(void);
@@ -124,6 +153,8 @@ float d5_read_gpu_busy(void);
 float d5_read_battery(void);
 float d5_read_perf_class(void);
 int d5_gpu_governors(char paths[][D5_PATH_LEN], int max);
+/* Same discovery for CPU frequency policies (cpufreq clusters). */
+int d5_cpu_governors(D5CpuSlot slots[], int max);
 /* Expands a path pattern with one '*' per component (bionic has no glob). */
 int d5_glob_paths(const char *pattern, char paths[][D5_PATH_LEN], int max);
 

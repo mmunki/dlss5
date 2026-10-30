@@ -9,10 +9,24 @@ void d5_config_defaults(D5Config *cfg) {
     cfg->enabled = 1;
     cfg->ai = 1;
     cfg->gpu_boost = 1;
-    cfg->downscale = 0.70f;
-    cfg->target_fps = 60;
+    cfg->cpu_boost = 1;
+    cfg->msaa = 4;
+    cfg->refresh_lock = 1;
+    cfg->refresh_rate = 90;
+    cfg->ui_density_delta = 0;
+    cfg->hud = 1;
+    /* 2.0 defaults to quality first: the AI controller still protects the
+     * thermals, but a cool phone plays at (near) native resolution. */
+    cfg->downscale = 0.90f;
+    cfg->target_fps = 90;
     cfg->saturation = 100;
     cfg->game_count = 0;
+}
+
+int d5_snap_msaa(int value) {
+    if (value <= 2) return 0;
+    if (value <= 6) return 4;
+    return 8;
 }
 
 int d5_config_has_game(const D5Config *cfg, const char *pkg) {
@@ -87,6 +101,24 @@ int d5_config_load(const char *path, D5Config *cfg) {
     if (sat > 100) sat = 100;
     next.saturation = sat;
 
+    next.msaa = d5_snap_msaa(
+        (int)d5_json_num(d5_json_get(root, "msaa"), next.msaa));
+    next.cpu_boost = d5_json_bool(d5_json_get(root, "cpu_boost"), next.cpu_boost);
+
+    int refresh = (int)d5_json_num(d5_json_get(root, "refresh_rate"), next.refresh_rate);
+    if (refresh < 0) refresh = 0;
+    if (refresh > 240) refresh = 240;
+    if (refresh > 0 && refresh < 24) refresh = 24;
+    next.refresh_rate = refresh;
+    next.refresh_lock = d5_json_bool(d5_json_get(root, "refresh_lock"), next.refresh_lock);
+
+    int ui_delta = (int)d5_json_num(d5_json_get(root, "ui_density_delta"), next.ui_density_delta);
+    if (ui_delta < -200) ui_delta = -200;
+    if (ui_delta > 200) ui_delta = 200;
+    next.ui_density_delta = ui_delta;
+
+    next.hud = d5_json_bool(d5_json_get(root, "hud"), next.hud);
+
     const D5Json *games = d5_json_get(root, "games");
     if (games && d5_json_type(games) == D5_JSON_ARRAY) {
         for (size_t i = 0; i < d5_json_len(games); i++) {
@@ -105,10 +137,16 @@ int d5_config_save(const char *path, const D5Config *cfg) {
     size_t used = 0;
     int n = snprintf(buf + used, sizeof(buf) - used,
                      "{\n"
-                     "  \"version\": 1,\n"
+                     "  \"version\": 2,\n"
                      "  \"enabled\": %s,\n"
                      "  \"ai\": %s,\n"
                      "  \"gpu_boost\": %s,\n"
+                     "  \"cpu_boost\": %s,\n"
+                     "  \"msaa\": %d,\n"
+                     "  \"refresh_lock\": %s,\n"
+                     "  \"refresh_rate\": %d,\n"
+                     "  \"ui_density_delta\": %d,\n"
+                     "  \"hud\": %s,\n"
                      "  \"downscale\": %.2f,\n"
                      "  \"target_fps\": %d,\n"
                      "  \"saturation\": %d,\n"
@@ -116,6 +154,12 @@ int d5_config_save(const char *path, const D5Config *cfg) {
                      cfg->enabled ? "true" : "false",
                      cfg->ai ? "true" : "false",
                      cfg->gpu_boost ? "true" : "false",
+                     cfg->cpu_boost ? "true" : "false",
+                     cfg->msaa,
+                     cfg->refresh_lock ? "true" : "false",
+                     cfg->refresh_rate,
+                     cfg->ui_density_delta,
+                     cfg->hud ? "true" : "false",
                      (double)cfg->downscale, cfg->target_fps, cfg->saturation);
     if (n < 0) return 0;
     used += (size_t)n;

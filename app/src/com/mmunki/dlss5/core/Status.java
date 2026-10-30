@@ -14,6 +14,11 @@ public final class Status {
     public int saturation = 100;
     public float scaleHint;
     public float fpsHint;
+    public int msaa;
+    public int cpu;
+    public int gpu;
+    public int refresh;
+    public int density;
 
     public static Status fromJson(String text) {
         Status status = new Status();
@@ -35,6 +40,11 @@ public final class Status {
         status.saturation = (int) MiniJson.number(root, "saturation", 100);
         status.scaleHint = (float) MiniJson.number(root, "scale_hint", 0.0);
         status.fpsHint = (float) MiniJson.number(root, "fps_hint", 0.0);
+        status.msaa = (int) MiniJson.number(root, "msaa", 0);
+        status.cpu = (int) MiniJson.number(root, "cpu", 0);
+        status.gpu = (int) MiniJson.number(root, "gpu", 0);
+        status.refresh = (int) MiniJson.number(root, "refresh", 0);
+        status.density = (int) MiniJson.number(root, "density", 0);
         return status;
     }
 
@@ -45,10 +55,26 @@ public final class Status {
         if (!enabled) {
             return "paused (tile off)";
         }
+        StringBuilder extras = new StringBuilder();
+        if (msaa > 0) {
+            extras.append(" • msaa ").append(msaa).append("x");
+        }
+        if (cpu > 0) {
+            extras.append(" • cpu boost (").append(cpu).append(")");
+        }
+        if (gpu > 0) {
+            extras.append(" • gpu boost");
+        }
+        if (refresh > 0) {
+            extras.append(" • ").append(refresh).append(" Hz");
+        }
+        if (density > 0) {
+            extras.append(" • ui ").append(density).append(" dpi");
+        }
         if (active) {
             return String.format(java.util.Locale.US,
-                    "boosting %s - scale %.0f%%, %d fps, colour %d",
-                    pkg, downscale * 100.0f, fps, saturation);
+                    "boosting %s - scale %.0f%%, %d fps, colour %d%s",
+                    pkg, downscale * 100.0f, fps, saturation, extras.toString());
         }
         return "waiting for a selected game";
     }

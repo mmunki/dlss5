@@ -17,8 +17,14 @@ public final class Config {
     public boolean enabled = true;
     public boolean ai = true;
     public boolean gpuBoost = true;
-    public float downscale = 0.70f;
-    public int targetFps = 60;
+    public boolean cpuBoost = true;
+    public int msaa = 4;
+    public boolean refreshLock = true;
+    public int refreshRate = 90;
+    public int uiDensityDelta = 0;
+    public boolean hud = true;
+    public float downscale = 0.90f;
+    public int targetFps = 90;
     public int saturation = 100;
     public final List<String> games = new ArrayList<String>();
 
@@ -83,19 +89,51 @@ public final class Config {
         if (saturation > 100) {
             saturation = 100;
         }
+        msaa = snapMsaa(msaa);
+        if (refreshRate < 0) {
+            refreshRate = 0;
+        }
+        if (refreshRate > 240) {
+            refreshRate = 240;
+        }
+        if (refreshRate > 0 && refreshRate < 24) {
+            refreshRate = 24;
+        }
+        if (uiDensityDelta < -200) {
+            uiDensityDelta = -200;
+        }
+        if (uiDensityDelta > 200) {
+            uiDensityDelta = 200;
+        }
         while (games.size() > MAX_GAMES) {
             games.remove(games.size() - 1);
         }
+    }
+
+    public static int snapMsaa(int value) {
+        if (value <= 2) {
+            return 0;
+        }
+        if (value <= 6) {
+            return 4;
+        }
+        return 8;
     }
 
     public String toJson() {
         clamp();
         StringBuilder out = new StringBuilder(256);
         out.append("{\n");
-        out.append("  \"version\": 1,\n");
+        out.append("  \"version\": 2,\n");
         out.append("  \"enabled\": ").append(enabled).append(",\n");
         out.append("  \"ai\": ").append(ai).append(",\n");
         out.append("  \"gpu_boost\": ").append(gpuBoost).append(",\n");
+        out.append("  \"cpu_boost\": ").append(cpuBoost).append(",\n");
+        out.append("  \"msaa\": ").append(msaa).append(",\n");
+        out.append("  \"refresh_lock\": ").append(refreshLock).append(",\n");
+        out.append("  \"refresh_rate\": ").append(refreshRate).append(",\n");
+        out.append("  \"ui_density_delta\": ").append(uiDensityDelta).append(",\n");
+        out.append("  \"hud\": ").append(hud).append(",\n");
         out.append("  \"downscale\": ").append(String.format(Locale.US, "%.2f", downscale))
                 .append(",\n");
         out.append("  \"target_fps\": ").append(targetFps).append(",\n");
@@ -126,6 +164,13 @@ public final class Config {
         config.enabled = MiniJson.bool(root, "enabled", config.enabled);
         config.ai = MiniJson.bool(root, "ai", config.ai);
         config.gpuBoost = MiniJson.bool(root, "gpu_boost", config.gpuBoost);
+        config.cpuBoost = MiniJson.bool(root, "cpu_boost", config.cpuBoost);
+        config.msaa = (int) MiniJson.number(root, "msaa", config.msaa);
+        config.refreshLock = MiniJson.bool(root, "refresh_lock", config.refreshLock);
+        config.refreshRate = (int) MiniJson.number(root, "refresh_rate", config.refreshRate);
+        config.uiDensityDelta = (int) MiniJson.number(root, "ui_density_delta",
+                config.uiDensityDelta);
+        config.hud = MiniJson.bool(root, "hud", config.hud);
         config.downscale = (float) MiniJson.number(root, "downscale", config.downscale);
         config.targetFps = (int) MiniJson.number(root, "target_fps", config.targetFps);
         config.saturation = (int) MiniJson.number(root, "saturation", config.saturation);
@@ -146,6 +191,12 @@ public final class Config {
         map.put("enabled", enabled);
         map.put("ai", ai);
         map.put("gpu_boost", gpuBoost);
+        map.put("cpu_boost", cpuBoost);
+        map.put("msaa", msaa);
+        map.put("refresh_lock", refreshLock);
+        map.put("refresh_rate", refreshRate);
+        map.put("ui_density_delta", uiDensityDelta);
+        map.put("hud", hud);
         map.put("downscale", downscale);
         map.put("target_fps", targetFps);
         map.put("saturation", saturation);

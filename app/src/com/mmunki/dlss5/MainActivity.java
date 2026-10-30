@@ -4,10 +4,13 @@ import android.app.Activity;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.content.ComponentName;
+import android.content.Intent;
+import android.provider.Settings;
 import android.service.quicksettings.TileService;
 import android.text.TextUtils;
 import android.view.Gravity;
@@ -37,6 +40,8 @@ import java.util.List;
 public class MainActivity extends Activity {
 
     private static final int[] FPS_VALUES = {0, 30, 45, 60, 90, 120};
+    private static final int[] MSAA_VALUES = {0, 4, 8};
+    private static final int[] REFRESH_VALUES = {0, 60, 90, 120, 144};
 
     private Config config = Config.defaults();
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -46,12 +51,22 @@ public class MainActivity extends Activity {
     private Switch enabledSwitch;
     private Switch aiSwitch;
     private Switch gpuSwitch;
+    private Switch cpuSwitch;
+    private Switch refreshSwitch;
+    private Switch hudSwitch;
+    private Button overlayButton;
     private SeekBar scaleSeek;
     private SeekBar fpsSeek;
     private SeekBar saturationSeek;
+    private SeekBar msaaSeek;
+    private SeekBar refreshSeek;
+    private SeekBar uiSeek;
     private TextView scaleLabel;
     private TextView fpsLabel;
     private TextView saturationLabel;
+    private TextView msaaLabel;
+    private TextView refreshLabel;
+    private TextView uiLabel;
     private LinearLayout gamesContainer;
     private boolean populating;
 
@@ -72,8 +87,25 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onStop() {
+        super.onStop();
+        // The user is probably launching a game now: keep the HUD alive for
+        // that game until the app is opened again.
+        if (config.hud) {
+            GameHud.enable(this);
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        GameHud.disable();
+    }
+
+    @Override
     protected void onDestroy() {
         handler.removeCallbacksAndMessages(null);
+        GameHud.disable();
         super.onDestroy();
     }
 
@@ -98,7 +130,9 @@ public class MainActivity extends Activity {
         root.addView(title);
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("Per-game render scaling, GPU boost and colour calibration for Android arm64.");
+        subtitle.setText("Per-game ultra graphics engine: anti-aliasing, GPU/CPU "
+                + "boost, refresh lock, game UI mode and colour calibration "
+                + "for Android arm64 with root.");
         subtitle.setTextColor(Color.rgb(170, 178, 190));
         subtitle.setTextSize(13);
         subtitle.setPadding(0, dp(4), 0, dp(16));
@@ -121,15 +155,43 @@ public class MainActivity extends Activity {
                 "The control centre tile flips the same switch.");
         aiSwitch = addSwitch(root, "Adaptive AI controller",
                 "Chooses the render scale from temperature, GPU load and SoC class.");
-        gpuSwitch = addSwitch(root, "GPU governor boost",
+        gpuSwitch = addSwitch(root, "GPU performance boost",
                 "Pins the GPU governor to performance while a selected game runs.");
+        cpuSwitch = addSwitch(root, "CPU performance boost",
+                "Pins every CPU cluster to performance while a selected game runs, "
+                        + "then restores the original governors.");
+        refreshSwitch = addSwitch(root, "Peak refresh-rate lock",
+                "Locks the panel to the target hertz while a selected game runs "
+                        + "and restores your previous setting after it.");
 
         scaleSeek = addSlider(root, "Render scale floor", 0, 70);
         scaleLabel = addValueLabel(root);
         fpsSeek = addSlider(root, "Frame-rate cap", 0, FPS_VALUES.length - 1);
         fpsLabel = addValueLabel(root);
+        msaaSeek = addSlider(root, "Anti-aliasing force (MSAA)", 0,
+                MSAA_VALUES.length - 1);
+        msaaLabel = addValueLabel(root);
+        refreshSeek = addSlider(root, "Refresh-rate target", 0,
+                REFRESH_VALUES.length - 1);
+        refreshLabel = addValueLabel(root);
+        uiSeek = addSlider(root, "Game UI size shift (density delta)", 0, 12);
+        uiLabel = addValueLabel(root);
         saturationSeek = addSlider(root, "Colour calibration (100 = native)", 0, 50);
         saturationLabel = addValueLabel(root);
+
+        hudSwitch = addSwitch(root, "DLSS5 game HUD",
+                "A small pass-through overlay shows the boost state while you "
+                        + "play. It can never block a touch of the game.");
+        overlayButton = new Button(this);
+        overlayButton.setText("Grant the overlay permission");
+        overlayButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + getPackageName())));
+            }
+        });
+        root.addView(overlayButton);
 
         TextView gamesHeading = new TextView(this);
         gamesHeading.setText("Games DLSS5 affects");
@@ -140,9 +202,11 @@ public class MainActivity extends Activity {
         root.addView(gamesHeading);
 
         TextView gamesHint = new TextView(this);
-        gamesHint.setText("Only user-installed apps are listed. System apps are never touched. "
-                + "Marked with * when the app declares the game category, which Android's "
-                + "GameManager needs for render scaling.");
+        gamesHint.setText("Only user-installed apps are listed (that covers every "
+                + "game you install yourself; system apps are never touched). "
+                + "Marked with * when the app declares the game category, which "
+                + "Android's GameManager needs for render scaling - the other "
+                + "stages apply to the app regardless.");
         gamesHint.setTextColor(Color.rgb(150, 158, 170));
         gamesHint.setTextSize(12);
         gamesHint.setPadding(0, 0, 0, dp(10));
@@ -184,11 +248,17 @@ public class MainActivity extends Activity {
         root.addView(restart);
 
         TextView footer = new TextView(this);
-        footer.setText("\nDLSS5 is not NVIDIA DLSS. It is an on-device render-budget engine: "
-                + "it lowers the internal render resolution through Android's GameManager, "
-                + "upscales through the display pipeline, pins the GPU governor and calibrates "
-                + "colour. Real DLSS needs motion vectors and tensor cores inside the game "
-                + "engine, which no root module can add to an arbitrary app.");
+        footer.setText("\nDLSS5 is not NVIDIA DLSS. It is an on-device graphics "
+                + "engine: it forces anti-aliasing, pins the GPU/CPU governors, "
+                + "locks the display refresh rate, shifts the interface size of "
+                + "the game, lowers the internal render resolution through "
+                + "Android's GameManager when the phone is under load, and "
+                + "upscales through the display pipeline. Real DLSS needs motion "
+                + "vectors and tensor cores inside the game engine, which no root "
+                + "module can add to an arbitrary app.\n\nThe MSAA force depends "
+                + "on the game's GLES version and driver. The UI shift changes "
+                + "the density Android reports while the game runs (the game "
+                + "relaunches its activity once when that happens).");
         footer.setTextColor(Color.rgb(145, 152, 165));
         footer.setTextSize(11);
         root.addView(footer);
@@ -222,6 +292,37 @@ public class MainActivity extends Activity {
                 config.gpuBoost = isChecked;
             }
         });
+        cpuSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                if (populating) {
+                    return;
+                }
+                config.cpuBoost = isChecked;
+            }
+        });
+        refreshSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                if (populating) {
+                    return;
+                }
+                config.refreshLock = isChecked;
+                updateRefreshLabel();
+            }
+        });
+        hudSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                if (populating) {
+                    return;
+                }
+                config.hud = isChecked;
+                overlayButton.setVisibility(
+                        Settings.canDrawOverlays(MainActivity.this)
+                                ? View.GONE : View.VISIBLE);
+            }
+        });
 
         scaleSeek.setOnSeekBarChangeListener(new SimpleSeekListener() {
             @Override
@@ -233,6 +334,24 @@ public class MainActivity extends Activity {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 updateFpsLabel();
+            }
+        });
+        msaaSeek.setOnSeekBarChangeListener(new SimpleSeekListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                updateMsaaLabel();
+            }
+        });
+        refreshSeek.setOnSeekBarChangeListener(new SimpleSeekListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                updateRefreshLabel();
+            }
+        });
+        uiSeek.setOnSeekBarChangeListener(new SimpleSeekListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                updateUiLabel();
             }
         });
         saturationSeek.setOnSeekBarChangeListener(new SimpleSeekListener() {
@@ -403,6 +522,9 @@ public class MainActivity extends Activity {
         enabledSwitch.setChecked(config.enabled);
         aiSwitch.setChecked(config.ai);
         gpuSwitch.setChecked(config.gpuBoost);
+        cpuSwitch.setChecked(config.cpuBoost);
+        refreshSwitch.setChecked(config.refreshLock);
+        hudSwitch.setChecked(config.hud);
 
         scaleSeek.setProgress(Math.round((config.downscale - 0.30f) * 100.0f));
         int fpsIndex = 0;
@@ -413,12 +535,27 @@ public class MainActivity extends Activity {
             }
         }
         fpsSeek.setProgress(fpsIndex);
+        msaaSeek.setProgress(Math.max(0, Config.snapMsaa(config.msaa) / 2));
+        int refreshIndex = 0;
+        for (int i = 0; i < REFRESH_VALUES.length; i++) {
+            if (REFRESH_VALUES[i] == config.refreshRate) {
+                refreshIndex = i;
+                break;
+            }
+        }
+        refreshSeek.setProgress(refreshIndex);
+        uiSeek.setProgress(Math.round((config.uiDensityDelta + 120) / 20.0f));
         saturationSeek.setProgress(Math.max(0, config.saturation - 50));
         populating = false;
 
         updateScaleLabel();
         updateFpsLabel();
+        updateMsaaLabel();
+        updateRefreshLabel();
+        updateUiLabel();
         updateSaturationLabel();
+        overlayButton.setVisibility(
+                Settings.canDrawOverlays(this) ? View.GONE : View.VISIBLE);
     }
 
     private float selectedScale() {
@@ -434,6 +571,20 @@ public class MainActivity extends Activity {
         return 50 + saturationSeek.getProgress();
     }
 
+    private int selectedMsaa() {
+        int index = Math.max(0, Math.min(MSAA_VALUES.length - 1, msaaSeek.getProgress()));
+        return MSAA_VALUES[index];
+    }
+
+    private int selectedRefresh() {
+        int index = Math.max(0, Math.min(REFRESH_VALUES.length - 1, refreshSeek.getProgress()));
+        return REFRESH_VALUES[index];
+    }
+
+    private int selectedUiDelta() {
+        return (uiSeek.getProgress() - 6) * 20;
+    }
+
     private void updateScaleLabel() {
         scaleLabel.setText(String.format(java.util.Locale.US,
                 "floor %.0f%% of native (%s)", selectedScale() * 100.0f,
@@ -443,6 +594,35 @@ public class MainActivity extends Activity {
     private void updateFpsLabel() {
         int fps = selectedFps();
         fpsLabel.setText(fps == 0 ? "no cap, the panel decides" : fps + " fps");
+    }
+
+    private void updateMsaaLabel() {
+        int msaa = selectedMsaa();
+        msaaLabel.setText(msaa == 0 ? "off, the driver decides"
+                : msaa + "x forced on GLES (edge smoothing)");
+    }
+
+    private void updateRefreshLabel() {
+        int refresh = selectedRefresh();
+        if (!refreshSwitch.isChecked()) {
+            refreshLabel.setText("refresh-rate lock is off");
+        } else if (refresh == 0) {
+            refreshLabel.setText("the panel keeps its own default rate");
+        } else {
+            refreshLabel.setText(refresh + " Hz while a selected game runs"
+                    + " (devices that cannot reach it simply play at their top rate)");
+        }
+    }
+
+    private void updateUiLabel() {
+        int delta = selectedUiDelta();
+        if (delta == 0) {
+            uiLabel.setText("no shift, the game keeps its own interface size");
+        } else if (delta < 0) {
+            uiLabel.setText(delta + " dpi - compact/sharper UI, more world on screen");
+        } else {
+            uiLabel.setText("+" + delta + " dpi - bigger UI, easier touch targets");
+        }
     }
 
     private void updateSaturationLabel() {
@@ -456,6 +636,12 @@ public class MainActivity extends Activity {
         config.downscale = selectedScale();
         config.targetFps = selectedFps();
         config.saturation = selectedSaturation();
+        config.msaa = selectedMsaa();
+        config.refreshLock = refreshSwitch.isChecked();
+        config.refreshRate = selectedRefresh();
+        config.uiDensityDelta = selectedUiDelta();
+        config.cpuBoost = cpuSwitch.isChecked();
+        config.hud = hudSwitch.isChecked();
         config.enabled = enabledSwitch.isChecked();
         config.ai = aiSwitch.isChecked();
         config.gpuBoost = gpuSwitch.isChecked();
