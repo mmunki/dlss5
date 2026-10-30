@@ -1,6 +1,8 @@
 import com.mmunki.dlss5.core.Config;
 import com.mmunki.dlss5.core.GameFilter;
+import com.mmunki.dlss5.core.InstallScript;
 import com.mmunki.dlss5.core.MiniJson;
+import com.mmunki.dlss5.core.Paths;
 import com.mmunki.dlss5.core.Status;
 
 import java.util.List;
@@ -24,11 +26,18 @@ public final class CoreTests {
     }
 
     public static void main(String[] args) throws Exception {
+        if (args.length == 2 && "--dump-install-script".equals(args[0])) {
+            // Used by scripts/module-test.sh to execute the exact script the
+            // app runs, with /data/adb redirected into a sandbox.
+            System.out.print(InstallScript.build(args[1]));
+            return;
+        }
         json();
         config();
         scale();
         packages();
         status();
+        install();
         System.out.println(checks + " checks, " + failures + " failure(s)");
         if (failures != 0) {
             System.exit(1);
@@ -176,5 +185,37 @@ public final class CoreTests {
 
         Status waiting = Status.fromJson("{\"running\": true, \"enabled\": true}");
         check(waiting.describe().contains("waiting"), "describe waiting");
+    }
+
+    /**
+     * The install script is the app-side twin of the module installer.  The
+     * regression it guards: a recursive 0644 pass *after* the 0755 on the
+     * daemon leaves dlss5d non-executable, and every existence check then
+     * reports "missing" while the file is right there.
+     */
+    private static void install() {
+        String script = InstallScript.build("/data/user/0/com.mmunki.dlss5/cache/module");
+        int recursive = script.indexOf("find \"$DST\" -type f -exec chmod 0644 {} +;");
+        int scripts = script.indexOf("chmod 0755 \"$DST\"/service.sh");
+        check(recursive >= 0, "install script has the recursive read-only pass");
+        check(scripts > recursive, "executables are restored after the recursive pass");
+        check(script.indexOf("system/bin/dlss5d;") > recursive,
+                "the daemon is made executable after the recursive pass");
+        check(script.contains("mv -f \"$DATA/bin/dlss5d.new\" \"$DATA/bin/dlss5d\""),
+                "the runtime copy is renamed into place");
+        check(script.contains(Paths.RUNTIME_BIN), "runtime copy is the app daemon path");
+        check(script.contains("[ -x \"" + Paths.RUNTIME_BIN + "\""),
+                "install verifies the daemon is executable");
+        check(script.contains("\"" + Paths.RUNTIME_BIN + "\" --version"),
+                "install verifies the daemon can run");
+        check(script.endsWith("MODULE-INSTALLED"), "install prints the marker last");
+
+        check(Paths.DAEMON_CANDIDATES.length == 3, "three daemon candidates");
+        check(Paths.DAEMON_CANDIDATES[0].equals(Paths.RUNTIME_BIN),
+                "the executable runtime copy is tried first");
+        check(Paths.candidateList().contains(Paths.MODULE_BIN),
+                "the module binary is a fallback");
+        check(Paths.MODULE_PROP.startsWith(Paths.MODULE_DIR), "module.prop path");
+        check(Paths.RUNTIME_BIN.startsWith(Paths.DIR + "/"), "runtime binary is in the state dir");
     }
 }

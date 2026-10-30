@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 static int g_failures;
@@ -328,6 +329,28 @@ static void test_model(void) {
     }
 }
 
+static void test_lock(void) {
+    char dir[512];
+    char lock[600];
+    snprintf(dir, sizeof(dir), "%s/dlss5-lock", tmp_dir());
+    mkdir(dir, 0700);
+    snprintf(lock, sizeof(lock), "%s/daemon.lock", dir);
+
+    int first = d5_lock_take(lock);
+    CHECK(first >= 0);
+    /* flock() is per open file description, so a second open in this very
+     * process is refused exactly like a second daemon would be. */
+    int second = d5_lock_take(lock);
+    CHECK(second < 0);
+    d5_lock_release(first);
+    int third = d5_lock_take(lock);
+    CHECK(third >= 0);
+    d5_lock_release(third);
+    CHECK(d5_lock_take("/nonexistent-dlss5/dir/daemon.lock") < 0);
+    unlink(lock);
+    rmdir(dir);
+}
+
 static void test_commands(void) {
     char buf[512];
     CHECK(d5_build_game_set(buf, sizeof(buf), 0.75f, 60, "com.example.game"));
@@ -347,6 +370,7 @@ int d5_selftest(void) {
     test_status();
     test_model();
     test_commands();
+    test_lock();
     printf("%d checks, %d failure(s)\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

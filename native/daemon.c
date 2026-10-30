@@ -59,6 +59,7 @@ typedef struct {
     const char *config;
     const char *status;
     const char *applied;
+    const char *lock;
     const char *once_pkg;
     int keep;
 } Paths;
@@ -258,16 +259,19 @@ static void usage(void) {
            "  --config PATH     config JSON (default %s)\n"
            "  --status-file P   status JSON (default %s)\n"
            "  --applied-file P  recovery state (default %s)\n"
+           "  --lock-file P     single instance lock (default %s)\n"
            "  --package NAME    with --once: evaluate NAME instead of the foreground app\n"
            "  --keep            with --once: leave the profile applied\n"
            "  --dry-run         print the commands instead of running them\n"
            "  --verbose         log every command\n"
            "  --version         print the version\n",
-           D5_VERSION, D5_DEFAULT_CONFIG, D5_DEFAULT_STATUS, D5_DEFAULT_APPLIED);
+           D5_VERSION, D5_DEFAULT_CONFIG, D5_DEFAULT_STATUS, D5_DEFAULT_APPLIED,
+           D5_DEFAULT_LOCK);
 }
 
 int main(int argc, char **argv) {
-    Paths paths = {D5_DEFAULT_CONFIG, D5_DEFAULT_STATUS, D5_DEFAULT_APPLIED, NULL, 0};
+    Paths paths = {D5_DEFAULT_CONFIG, D5_DEFAULT_STATUS, D5_DEFAULT_APPLIED,
+                   D5_DEFAULT_LOCK, NULL, 0};
     enum { MODE_DAEMON, MODE_ONCE, MODE_STATUS, MODE_SELFTEST, MODE_VERSION } mode =
         MODE_DAEMON;
 
@@ -284,6 +288,7 @@ int main(int argc, char **argv) {
         else if (strcmp(arg, "--config") == 0 && i + 1 < argc) paths.config = argv[++i];
         else if (strcmp(arg, "--status-file") == 0 && i + 1 < argc) paths.status = argv[++i];
         else if (strcmp(arg, "--applied-file") == 0 && i + 1 < argc) paths.applied = argv[++i];
+        else if (strcmp(arg, "--lock-file") == 0 && i + 1 < argc) paths.lock = argv[++i];
         else if (strcmp(arg, "--package") == 0 && i + 1 < argc) paths.once_pkg = argv[++i];
         else if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
             usage();
@@ -322,8 +327,23 @@ int main(int argc, char **argv) {
     sa.sa_handler = on_reload;
     sigaction(SIGHUP, &sa, NULL);
 
+    /* The boot watchdog, the Quick Settings tile and the control app can all
+     * try to start the daemon.  Only the first one wins; the others exit with
+     * D5_EXIT_ALREADY_RUNNING instead of applying the profile twice. */
+    mkdir_p(D5_DEFAULT_DIR);
+    int lock_fd = d5_lock_take(paths.lock);
+    if (lock_fd == -1) {
+        d5_log("another instance is already running (lock %s), exiting", paths.lock);
+        return D5_EXIT_ALREADY_RUNNING;
+    }
+    if (lock_fd == -2) {
+        d5_log("warning: cannot create the lock file %s, running without it",
+               paths.lock);
+    }
+
     d5_log("starting, config %s", paths.config);
     int rc = run_daemon(&paths);
+    d5_lock_release(lock_fd);
     d5_log("exit %d", rc);
     return rc;
 }

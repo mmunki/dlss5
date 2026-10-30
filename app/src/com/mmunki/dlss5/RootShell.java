@@ -21,10 +21,17 @@ public final class RootShell {
         }
     }
 
+    /** First launch shows the su prompt, so the default is generous. */
+    private static final int DEFAULT_TIMEOUT = 60;
+
     private RootShell() {
     }
 
     public static Result run(String command) {
+        return run(command, DEFAULT_TIMEOUT);
+    }
+
+    public static Result run(String command, int timeoutSeconds) {
         Process process = null;
         try {
             ProcessBuilder builder = new ProcessBuilder("su", "-c", command);
@@ -48,7 +55,7 @@ public final class RootShell {
             });
             reader.setDaemon(true);
             reader.start();
-            if (!process.waitFor(20, TimeUnit.SECONDS)) {
+            if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
                 process.destroy();
                 return new Result(-1, "timeout");
             }

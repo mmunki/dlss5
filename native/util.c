@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <dirent.h>
+#include <errno.h>
 #include <fnmatch.h>
 #include <math.h>
 #include <stdarg.h>
@@ -9,8 +10,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/file.h>
 #include <sys/time.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -108,6 +111,36 @@ long long d5_now_ms(void) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
+
+/* One daemon per device.  The boot watchdog and the control app both start
+ * the daemon, so a non-blocking flock is taken before anything is applied.
+ * The lock is released by the kernel when the process dies, so a crash never
+ * leaves a stale lock behind.
+ *
+ * Returns a file descriptor, -1 when another process holds the lock, or -2
+ * when the lock file itself cannot be created. */
+int d5_lock_take(const char *path) {
+    int fd = open(path, O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+    if (fd < 0) return -2;
+    if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        int err = errno;
+        close(fd);
+        return (err == EWOULDBLOCK || err == EAGAIN) ? -1 : -2;
+    }
+    char pid[32];
+    int n = snprintf(pid, sizeof(pid), "%d\n", (int)getpid());
+    if (lseek(fd, 0, SEEK_SET) >= 0) {
+        ssize_t written = write(fd, pid, (size_t)n);
+        (void)written;
+    }
+    return fd;
+}
+
+void d5_lock_release(int fd) {
+    if (fd < 0) return;
+    flock(fd, LOCK_UN);
+    close(fd);
 }
 
 int d5_cmd(const char *cmd, char *out, size_t out_len) {

@@ -209,8 +209,9 @@ check "nothing applied while disabled" test ! -s "$D5_CMD_LOG"
 echo "==> integration: daemon loop boosts the foreground game and restores on SIGTERM"
 : >"$D5_CMD_LOG"
 write_config true 4 0 1
+LOCK="$STATE/daemon.lock"
 "$HOST_BIN" --daemon --config "$CONFIG" --status-file "$STATUS" \
-    --applied-file "$APPLIED" >"$WORK/daemon.log" 2>&1 &
+    --applied-file "$APPLIED" --lock-file "$LOCK" >"$WORK/daemon.log" 2>&1 &
 daemon_pid=$!
 sleep 5
 check "daemon applied the foreground game" contains \
@@ -221,8 +222,32 @@ check "status file written" test -s "$STATUS"
 check "status names the game" grep -q "com.example.game" "$STATUS"
 check "status carries the new fields" matches \
     '"msaa": (4|8)|"cpu": [0-9]+|"refresh": 90' "$STATUS"
+
+echo "==> integration: a second daemon refuses to run twice"
+lines_before=$(wc -l <"$D5_CMD_LOG")
+second_rc=0
+"$HOST_BIN" --daemon --config "$CONFIG" --status-file "$STATUS" \
+    --applied-file "$APPLIED" --lock-file "$LOCK" >"$WORK/daemon2.log" 2>&1 \
+    || second_rc=$?
+check "second daemon exits with the already-running code" \
+    test "$second_rc" = "3"
+check "second daemon did not touch anything" \
+    test "$(wc -l <"$D5_CMD_LOG")" = "$lines_before"
+check "second daemon says why" grep -q "already running" "$WORK/daemon2.log"
+
 kill -TERM "$daemon_pid" 2>/dev/null || true
 wait "$daemon_pid" 2>/dev/null || true
+
+echo "==> integration: the lock is released after a clean exit"
+"$HOST_BIN" --daemon --config "$CONFIG" --status-file "$STATUS" \
+    --applied-file "$APPLIED" --lock-file "$LOCK" >"$WORK/daemon3.log" 2>&1 &
+third_pid=$!
+sleep 1.5
+check "a new daemon acquires the released lock" \
+    bash -c "! grep -q 'already running' '$WORK/daemon3.log' \
+        && grep -q 'starting, config' '$WORK/daemon3.log'"
+kill -TERM "$third_pid" 2>/dev/null || true
+wait "$third_pid" 2>/dev/null || true
 check "daemon restored on SIGTERM" contains "game reset com.example.game" "$D5_CMD_LOG"
 check "daemon restored msaa on SIGTERM" matches \
     "setprop debug\.egl\.msaa *$" "$D5_CMD_LOG"

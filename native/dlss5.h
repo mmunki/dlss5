@@ -9,8 +9,8 @@
 
 #include <stddef.h>
 
-#define D5_VERSION "2.0.0"
-#define D5_VERSION_CODE 2
+#define D5_VERSION "2.0.1"
+#define D5_VERSION_CODE 3
 
 #define D5_MAX_GAMES 64
 #define D5_PKG_LEN 128
@@ -30,6 +30,11 @@
 #define D5_DEFAULT_CONFIG "/data/adb/dlss5/config.json"
 #define D5_DEFAULT_STATUS "/data/adb/dlss5/status.json"
 #define D5_DEFAULT_APPLIED "/data/adb/dlss5/applied.json"
+#define D5_DEFAULT_LOCK "/data/adb/dlss5/dlss5d.lock"
+
+/* Exit code of `dlss5d --daemon` when another instance already holds the
+ * single-instance lock.  The boot watchdog uses it to avoid respawning. */
+#define D5_EXIT_ALREADY_RUNNING 3
 
 typedef struct {
     int enabled;          /* master switch, driven by the QS tile */
@@ -116,6 +121,10 @@ int d5_cmd(const char *cmd, char *out, size_t out_len);
  * package names. */
 int d5_build_game_set(char *buf, size_t len, float downscale, int fps,
                       const char *pkg);
+/* Single-instance lock: returns a file descriptor, or -1 when another
+ * process already holds it (or the file cannot be created). */
+int d5_lock_take(const char *path);
+void d5_lock_release(int fd);
 
 /* ------------------------------------------------------------------- json */
 typedef enum {
