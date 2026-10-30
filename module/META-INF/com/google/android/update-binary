@@ -1,0 +1,48 @@
+#!/sbin/sh
+#
+# Magisk module installer entry point.
+#
+# With Magisk present this sources Magisk's own util_functions.sh and lets it
+# do the installation (the normal path).  Other root managers that execute
+# update-binary but do not ship Magisk's functions get the small fallback
+# below, which implements the same, minimal contract: unpack the module into
+# /data/adb/modules/dlss5, apply permissions, run customize.sh.
+
+umask 022
+OUTFD="$2"
+ZIPFILE="$3"
+
+ui_print() { echo "$1"; }
+
+if [ -f /data/adb/magisk/util_functions.sh ]; then
+    . /data/adb/magisk/util_functions.sh
+    if [ "${MAGISK_VER_CODE:-0}" -ge 20400 ]; then
+        install_module
+        exit 0
+    fi
+fi
+
+# ------------------------------------------------------------- fallback
+MODID=dlss5
+MODPATH="/data/adb/modules/$MODID"
+rm -rf "$MODPATH"
+mkdir -p "$MODPATH"
+
+unzip -o "$ZIPFILE" -x 'META-INF/*' -d "$MODPATH" >/dev/null 2>&1 || {
+    ui_print "! cannot unzip $ZIPFILE"
+    exit 1
+}
+
+chmod -R 0755 "$MODPATH"
+find "$MODPATH" -type f -exec chmod 0644 {} +
+chmod 0755 "$MODPATH"/*.sh "$MODPATH/system/bin/dlss5d" 2>/dev/null
+touch "$MODPATH/update"
+
+if [ -f "$MODPATH/customize.sh" ]; then
+    cd "$MODPATH" || exit 1
+    . "$MODPATH/customize.sh"
+    rm -f "$MODPATH/customize.sh"
+fi
+
+ui_print "- DLSS5 installed, reboot to start the daemon"
+exit 0

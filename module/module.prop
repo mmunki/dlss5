@@ -1,0 +1,6 @@
+id=dlss5
+name=DLSS5
+version=1.0.0
+versionCode=1
+author=mmunki
+description=Per-game AI render scaling, GPU governor boost and colour calibration for Android arm64. Companion app adds the Quick Settings tile and the game picker.

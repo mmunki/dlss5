@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Fit the DLSS5 adaptive controller and emit native/model.h.
+
+The network is small on purpose (5 inputs, 8 hidden tanh units, 2 sigmoid
+outputs) so that it runs in a few microseconds inside the daemon.  It is
+fitted on a synthetic objective: the render scale a careful human tuner would
+pick for a given thermal/load/SoC state, plus the frame-rate fraction that
+still holds a stable frame time.
+
+The training is deterministic: fixed seed, fixed sample grid, no library
+beyond the Python standard library.  tools/train_model.py --check verifies
+that the committed header matches the code.
+
+Usage:
+    tools/train_model.py --out native/model.h
+    tools/train_model.py --check native/model.h
+"""
+from __future__ import annotations
+
+import argparse
+import math
+import random
+import sys
+
+INPUTS = 5
+HIDDEN = 8
+OUTPUTS = 2
+EPOCHS = 9000
+LEARNING_RATE = 0.35
+MOMENTUM = 0.9
+SEED = 1337
+
+
+def clamp(v: float, lo: float, hi: float) -> float:
+    return lo if v < lo else hi if v > hi else v
+
+
+def target_scale(thermal: float, busy: float, perf: float, battery: float) -> float:
+    """1.0 = native resolution, lower = more aggressive render scaling."""
+    return clamp(0.95 + 0.25 * perf + 0.10 * battery - 0.55 * thermal - 0.35 * busy,
+                 0.35, 1.0)
+
+
+def target_fps(thermal: float, busy: float, perf: float) -> float:
+    """Fraction of the configured frame cap that still holds a frame time."""
+    return clamp(1.0 - 0.55 * thermal - 0.35 * busy + 0.10 * perf, 0.30, 1.0)
+
+
+def build_grid() -> list[tuple[list[float], list[float]]]:
+    values = [0.0, 0.25, 0.5, 0.75, 1.0]
+    samples = []
+    for thermal in values:
+        for busy in values:
+            for perf in (0.0, 0.5, 1.0):
+                for battery in (0.15, 0.6, 1.0):
+                    x = [thermal, busy, perf, 0.0, battery]
+                    y = [target_scale(thermal, busy, perf, battery),
+                         target_fps(thermal, busy, perf)]
+                    samples.append((x, y))
+    return samples
+
+
+def sigmoid(v: float) -> float:
+    if v < -60:
+        return 0.0
+    if v > 60:
+        return 1.0
+    return 1.0 / (1.0 + math.exp(-v))
+
+
+def train():
+    rng = random.Random(SEED)
+    w1 = [[rng.uniform(-0.5, 0.5) for _ in range(INPUTS)] for _ in range(HIDDEN)]
+    b1 = [0.0] * HIDDEN
+    w2 = [[rng.uniform(-0.5, 0.5) for _ in range(HIDDEN)] for _ in range(OUTPUTS)]
+    b2 = [0.0] * OUTPUTS
+    m_w1 = [[0.0] * INPUTS for _ in range(HIDDEN)]
+    m_b1 = [0.0] * HIDDEN
+    m_w2 = [[0.0] * HIDDEN for _ in range(OUTPUTS)]
+    m_b2 = [0.0] * OUTPUTS
+
+    samples = build_grid()
+    for epoch in range(EPOCHS):
+        g_w1 = [[0.0] * INPUTS for _ in range(HIDDEN)]
+        g_b1 = [0.0] * HIDDEN
+        g_w2 = [[0.0] * HIDDEN for _ in range(OUTPUTS)]
+        g_b2 = [0.0] * OUTPUTS
+        loss = 0.0
+        for x, y in samples:
+            hidden = []
+            for j in range(HIDDEN):
+                s = b1[j] + sum(w1[j][i] * x[i] for i in range(INPUTS))
+                hidden.append(math.tanh(s))
+            outs = []
+            for k in range(OUTPUTS):
+                s = b2[k] + sum(w2[k][j] * hidden[j] for j in range(HIDDEN))
+                outs.append(sigmoid(s))
+            for k in range(OUTPUTS):
+                d = outs[k] - y[k]
+                loss += d * d
+                d *= outs[k] * (1.0 - outs[k])
+                g_b2[k] += d
+                for j in range(HIDDEN):
+                    g_w2[k][j] += d * hidden[j]
+            for j in range(HIDDEN):
+                dsum = sum((outs[k] - y[k]) * outs[k] * (1.0 - outs[k]) * w2[k][j]
+                           for k in range(OUTPUTS))
+                dsum *= 1.0 - hidden[j] * hidden[j]
+                g_b1[j] += dsum
+                for i in range(INPUTS):
+                    g_w1[j][i] += dsum * x[i]
+        n = float(len(samples))
+        for j in range(HIDDEN):
+            m_b1[j] = MOMENTUM * m_b1[j] - LEARNING_RATE * g_b1[j] / n
+            b1[j] += m_b1[j]
+            for i in range(INPUTS):
+                m_w1[j][i] = MOMENTUM * m_w1[j][i] - LEARNING_RATE * g_w1[j][i] / n
+                w1[j][i] += m_w1[j][i]
+        for k in range(OUTPUTS):
+            m_b2[k] = MOMENTUM * m_b2[k] - LEARNING_RATE * g_b2[k] / n
+            b2[k] += m_b2[k]
+            for j in range(HIDDEN):
+                m_w2[k][j] = MOMENTUM * m_w2[k][j] - LEARNING_RATE * g_w2[k][j] / n
+                w2[k][j] += m_w2[k][j]
+        if epoch % 1500 == 0:
+            print(f"epoch {epoch:5d} loss {loss / n:.5f}", file=sys.stderr)
+    print(f"final loss {loss / n:.6f} over {len(samples)} samples", file=sys.stderr)
+    return w1, b1, w2, b2
+
+
+def fmt(value: float) -> str:
+    text = f"{value:.6f}"
+    if text == "-0.000000":
+        text = "0.000000"
+    return text
+
+
+def emit(w1, b1, w2, b2) -> str:
+    lines = [
+        "/* Generated by tools/train_model.py -- do not edit by hand.",
+        f" * inputs={INPUTS} hidden={HIDDEN} outputs={OUTPUTS} seed={SEED}",
+        f" * epochs={EPOCHS} lr={LEARNING_RATE} momentum={MOMENTUM}",
+        " * Objective: synthetic render-scale and frame-rate fraction labels.",
+        " */",
+        "#ifndef DLSS5_MODEL_H",
+        "#define DLSS5_MODEL_H",
+        "",
+        f"#define D5_INPUTS {INPUTS}",
+        f"#define D5_HIDDEN {HIDDEN}",
+        f"#define D5_OUTPUTS {OUTPUTS}",
+        "",
+        "static const float D5_W1[D5_HIDDEN][D5_INPUTS] = {",
+    ]
+    for row in w1:
+        lines.append("    {" + ", ".join(fmt(v) + "f" for v in row) + "},")
+    lines.append("};")
+    lines.append("")
+    lines.append("static const float D5_B1[D5_HIDDEN] = {")
+    lines.append("    " + ", ".join(fmt(v) + "f" for v in b1) + ",")
+    lines.append("};")
+    lines.append("")
+    lines.append("static const float D5_W2[D5_OUTPUTS][D5_HIDDEN] = {")
+    for row in w2:
+        lines.append("    {" + ", ".join(fmt(v) + "f" for v in row) + "},")
+    lines.append("};")
+    lines.append("")
+    lines.append("static const float D5_B2[D5_OUTPUTS] = {")
+    lines.append("    " + ", ".join(fmt(v) + "f" for v in b2) + ",")
+    lines.append("};")
+    lines.append("")
+    lines.append("#endif /* DLSS5_MODEL_H */")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--out", help="write the generated header here")
+    parser.add_argument("--check", metavar="HEADER",
+                        help="verify that HEADER matches a fresh training run")
+    args = parser.parse_args()
+    if not args.out and not args.check:
+        parser.error("one of --out or --check is required")
+
+    w1, b1, w2, b2 = train()
+    header = emit(w1, b1, w2, b2)
+
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as handle:
+            handle.write(header)
+        return 0
+
+    with open(args.check, "r", encoding="utf-8") as handle:
+        existing = handle.read()
+    if existing != header:
+        print(f"error: {args.check} is out of date, run tools/train_model.py "
+              f"--out {args.check}", file=sys.stderr)
+        return 1
+    print(f"{args.check} is up to date", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

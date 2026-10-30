@@ -1,0 +1,47 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Show toolchain
+        run: |
+          echo "SDK: ${ANDROID_HOME:-unset}"
+          ls "${ANDROID_HOME}/ndk" 2>/dev/null || true
+          ls "${ANDROID_HOME}/build-tools" 2>/dev/null || true
+
+      - name: Fetch static qemu-aarch64 for the ABI test
+        run: |
+          curl -fsSL -o /tmp/qemu-aarch64-static \
+            https://github.com/multiarch/qemu-user-static/releases/download/v7.2.0-1/qemu-aarch64-static
+          chmod +x /tmp/qemu-aarch64-static
+          echo "DLSS5_QEMU=/tmp/qemu-aarch64-static" >> "$GITHUB_ENV"
+
+      - name: Build, test and package
+        run: ./scripts/build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dlss5
+          path: |
+            dist/*.apk
+            dist/*.zip
+            dist/SHA256SUMS
+          if-no-files-found: error
