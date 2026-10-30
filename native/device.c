@@ -152,7 +152,9 @@ int d5_write_status(const char *path, int enabled, const D5Applied *applied,
              "  \"active\": %s,\n  \"package\": \"%s\",\n"
              "  \"downscale\": %.2f,\n  \"fps\": %d,\n"
              "  \"saturation\": %d,\n  \"scale_hint\": %.3f,\n"
-             "  \"fps_hint\": %.3f\n}\n",
+             "  \"fps_hint\": %.3f,\n"
+             "  \"msaa\": %d,\n  \"cpu\": %d,\n  \"gpu\": %d,\n"
+             "  \"refresh\": %d,\n  \"density\": %d\n}\n",
              enabled ? "true" : "false",
              applied && applied->active ? "true" : "false",
              applied && applied->active && d5_valid_package(applied->pkg)
@@ -161,6 +163,13 @@ int d5_write_status(const char *path, int enabled, const D5Applied *applied,
              applied && applied->active ? applied->fps : 0,
              applied && applied->active ? applied->saturation : 100,
              dec ? (double)dec->scale_hint : 0.0,
-             dec ? (double)dec->fps_hint : 0.0);
+             dec ? (double)dec->fps_hint : 0.0,
+             applied && applied->active ? applied->msaa : 0,
+             applied && applied->active && applied->cpu_set ? applied->cpu_count
+                                                            : 0,
+             applied && applied->active && applied->governor_set ? 1 : 0,
+             applied && applied->active ? applied->refresh_value : 0,
+             applied && applied->active && applied->density_set ? applied->density
+                                                                : 0);
     return d5_write_file(path, buf);
 }

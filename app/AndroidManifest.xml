@@ -1,13 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.mmunki.dlss5"
-    android:versionCode="1"
-    android:versionName="1.0.0">
+    android:versionCode="2"
+    android:versionName="2.0.0">
 
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="36" />
 
     <!-- Needed on Android 11+ to list the user apps the picker shows. -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <!-- The DLSS5 game HUD is a TYPE_APPLICATION_OVERLAY window; the user
+         grants it explicitly from the main screen. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:allowBackup="false"

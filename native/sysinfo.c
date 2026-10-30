@@ -111,6 +111,50 @@ static int governor_supports_performance(const char *path) {
     return strstr(buf, "performance") != NULL;
 }
 
+/* CPU cluster governors: one slot per cpufreq policy whose own list of
+ * available governors actually contains "performance".  The slot records the
+ * readable path to scaling_governor; the current value is read at apply time
+ * so the restore data is always fresh. */
+int d5_cpu_governors(D5CpuSlot slots[], int max) {
+    static const char *patterns[] = {
+        "/sys/devices/system/cpu/cpufreq/policy*/scaling_governor",
+        "/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor",
+    };
+    int count = 0;
+    for (size_t p = 0; p < sizeof(patterns) / sizeof(patterns[0]) && count < max; p++) {
+        static char candidates[64][D5_PATH_LEN];
+        int found = d5_glob_paths(patterns[p], candidates, 64);
+        for (int i = 0; i < found && count < max; i++) {
+            const char *path = candidates[i];
+            if (access(path, R_OK | W_OK) != 0) continue;
+            if (!governor_supports_performance(path)) continue;
+            /* cpuN duplicates the policy directory of its cluster, keep only
+             * one slot per real governor directory. */
+            char real[D5_PATH_LEN];
+            if (!realpath(path, real) || !*real) {
+                snprintf(real, sizeof(real), "%.*s", D5_PATH_LEN - 1, path);
+            }
+            int duplicate = 0;
+            for (int k = 0; k < count; k++) {
+                char other[D5_PATH_LEN];
+                if (!realpath(slots[k].path, other) || !*other) {
+                    snprintf(other, sizeof(other), "%.*s", D5_PATH_LEN - 1,
+                             slots[k].path);
+                }
+                if (strcmp(other, real) == 0) {
+                    duplicate = 1;
+                    break;
+                }
+            }
+            if (duplicate) continue;
+            snprintf(slots[count].path, D5_PATH_LEN, "%.*s", D5_PATH_LEN - 1, path);
+            slots[count].orig[0] = '\0';
+            count++;
+        }
+    }
+    return count;
+}
+
 int d5_gpu_governors(char paths[][D5_PATH_LEN], int max) {
     static const char *patterns[] = {
         "/sys/class/kgsl/kgsl-3d0/devfreq/governor",
